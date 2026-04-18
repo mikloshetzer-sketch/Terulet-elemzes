@@ -92,7 +92,6 @@ def main() -> None:
         print_save_confirmation(aoi_file)
 
         print("AOI sikeresen létrehozva és elmentve.")
-        print("Következő lépés: adatlekérés előkészítése.")
 
     except Exception as error:
         print(f"Hiba: {error}")
