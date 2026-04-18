@@ -1,0 +1,1 @@
+# Terulet-elemzes
