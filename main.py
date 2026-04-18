@@ -2,8 +2,8 @@ from pathlib import Path
 import sys
 import yaml
 
-# ÚJ IMPORT
 from aoi import build_bounding_box, print_bounding_box_summary
+from save_aoi import save_aoi_to_json, print_save_confirmation
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -85,12 +85,14 @@ def main() -> None:
 
         print_project_summary(config, output_folder)
 
-        # 🔥 ÚJ RÉSZ: AOI létrehozás
         bbox = build_bounding_box(config)
         print_bounding_box_summary(bbox)
 
-        print("AOI sikeresen létrehozva.")
-        print("Következő lépés: AOI mentése és adatlekérés előkészítése.")
+        aoi_file = save_aoi_to_json(bbox, output_folder)
+        print_save_confirmation(aoi_file)
+
+        print("AOI sikeresen létrehozva és elmentve.")
+        print("Következő lépés: adatlekérés előkészítése.")
 
     except Exception as error:
         print(f"Hiba: {error}")
