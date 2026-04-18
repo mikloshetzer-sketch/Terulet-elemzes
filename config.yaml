@@ -1,0 +1,26 @@
+project_name: "aleppo_change_analysis"
+
+location:
+  name: "Aleppo, Syria"
+  latitude: 36.2021
+  longitude: 37.1343
+
+area_of_interest:
+  buffer_km: 10
+
+time_range:
+  start_date: "2018-01-01"
+  end_date: "2025-01-01"
+
+data_source:
+  satellite: "sentinel-2"
+  cloud_cover_max: 20
+
+analysis:
+  type: "urban_change"
+  output_resolution_m: 10
+
+output:
+  folder: "output"
+  save_preview_images: true
+  save_statistics: true
