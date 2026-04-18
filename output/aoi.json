@@ -1,0 +1,12 @@
+{
+    "center": {
+        "name": "Aleppo, Syria",
+        "latitude": 36.2021,
+        "longitude": 37.1343
+    },
+    "buffer_km": 10,
+    "min_lat": 36.1122688825009,
+    "max_lat": 36.291931117499104,
+    "min_lon": 37.022976647407496,
+    "max_lon": 37.24562335259251
+}
