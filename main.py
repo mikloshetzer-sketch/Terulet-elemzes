@@ -4,6 +4,7 @@ import yaml
 
 from aoi import build_bounding_box, print_bounding_box_summary
 from save_aoi import save_aoi_to_json, print_save_confirmation
+from data_fetch import load_aoi, build_data_request, save_data_request, print_data_request_summary
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -91,7 +92,13 @@ def main() -> None:
         aoi_file = save_aoi_to_json(bbox, output_folder)
         print_save_confirmation(aoi_file)
 
+        aoi = load_aoi(aoi_file)
+        data_request = build_data_request(config, aoi)
+        data_request_file = save_data_request(data_request, output_folder)
+        print_data_request_summary(data_request, data_request_file)
+
         print("AOI sikeresen létrehozva és elmentve.")
+        print("Adatlekérés előkészítve.")
 
     except Exception as error:
         print(f"Hiba: {error}")
