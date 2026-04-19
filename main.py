@@ -15,6 +15,8 @@ from data_fetch import (
     save_download_result,
     print_stac_result_summary,
     print_download_summary,
+    download_preview_image,
+    print_preview_download_summary,
 )
 
 
@@ -129,9 +131,13 @@ def main() -> None:
         download_result_file = save_download_result(download_result, output_folder)
         print_download_summary(download_result, download_result_file)
 
+        preview_result = download_preview_image(feature, output_folder)
+        print_preview_download_summary(preview_result)
+
         print("AOI sikeresen létrehozva és elmentve.")
         print("Adatlekérés előkészítve.")
         print("Valódi STAC találat sikeresen lekérve.")
+        print("Preview kép sikeresen letöltve.")
 
     except Exception as error:
         print(f"Hiba: {error}")
