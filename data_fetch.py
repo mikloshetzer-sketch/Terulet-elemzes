@@ -37,6 +37,7 @@ def build_data_request(config: Dict, aoi: Dict) -> Dict:
             "start_date": config["time_range"]["start_date"],
             "end_date": config["time_range"]["end_date"],
         },
+        "comparison": config.get("comparison", {}),
         "analysis": {
             "type": config["analysis"]["type"],
             "output_resolution_m": config["analysis"]["output_resolution_m"],
@@ -63,16 +64,33 @@ def print_data_request_summary(request: Dict, output_file: Path) -> None:
     print(f"Helyszín: {request['location_name']}")
     print(f"Műholdforrás: {request['data_source']['satellite']}")
     print(
-        f"Időszak: {request['time_range']['start_date']} → "
+        f"Fő időszak: {request['time_range']['start_date']} → "
         f"{request['time_range']['end_date']}"
     )
+
+    comparison = request.get("comparison", {})
+    if comparison.get("before") and comparison.get("after"):
+        print(
+            f"Before: {comparison['before']['start_date']} → "
+            f"{comparison['before']['end_date']}"
+        )
+        print(
+            f"After: {comparison['after']['start_date']} → "
+            f"{comparison['after']['end_date']}"
+        )
+
     print(f"Felhőborítottság max.: {request['data_source']['cloud_cover_max']}%")
     print(f"Elemzés típusa: {request['analysis']['type']}")
     print(f"Kimeneti fájl: {output_file.resolve()}")
     print("==============================\n")
 
 
-def build_stac_search_params(config: Dict, aoi: Dict) -> Dict[str, str]:
+def build_stac_search_params(
+    config: Dict,
+    aoi: Dict,
+    start_date: str,
+    end_date: str,
+) -> Dict[str, str]:
     bbox = ",".join(
         [
             str(aoi["min_lon"]),
@@ -84,18 +102,20 @@ def build_stac_search_params(config: Dict, aoi: Dict) -> Dict[str, str]:
 
     params = {
         "bbox": bbox,
-        "datetime": (
-            f"{config['time_range']['start_date']}T00:00:00Z/"
-            f"{config['time_range']['end_date']}T23:59:59Z"
-        ),
+        "datetime": f"{start_date}T00:00:00Z/{end_date}T23:59:59Z",
         "collections": "sentinel-2-l2a",
-        "limit": "5",
+        "limit": "10",
     }
     return params
 
 
-def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
-    params = build_stac_search_params(config, aoi)
+def search_sentinel_data(
+    config: Dict,
+    aoi: Dict,
+    start_date: str,
+    end_date: str,
+) -> Dict:
+    params = build_stac_search_params(config, aoi, start_date, end_date)
 
     response = requests.get(
         STAC_SEARCH_URL,
@@ -118,7 +138,9 @@ def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
         raise ValueError("A STAC válasz nem tartalmaz 'features' mezőt.")
 
     if not data["features"]:
-        raise RuntimeError("Nincs találat a megadott paraméterekre.")
+        raise RuntimeError(
+            f"Nincs találat a megadott paraméterekre: {start_date} → {end_date}"
+        )
 
     max_cloud = config["data_source"]["cloud_cover_max"]
     filtered = [
@@ -141,8 +163,8 @@ def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
     return best_feature
 
 
-def save_stac_result(feature: Dict, output_folder: Path) -> Path:
-    output_file = output_folder / "stac_result.json"
+def save_stac_result(feature: Dict, output_folder: Path, label: str) -> Path:
+    output_file = output_folder / f"stac_result_{label}.json"
 
     with output_file.open("w", encoding="utf-8") as file:
         json.dump(feature, file, indent=4, ensure_ascii=False)
@@ -150,11 +172,12 @@ def save_stac_result(feature: Dict, output_folder: Path) -> Path:
     return output_file
 
 
-def build_download_result(feature: Dict) -> Dict:
+def build_download_result(feature: Dict, label: str) -> Dict:
     properties = feature.get("properties", {})
     assets = feature.get("assets", {})
 
     result = {
+        "label": label,
         "status": "found",
         "id": feature.get("id"),
         "collection": feature.get("collection"),
@@ -166,8 +189,8 @@ def build_download_result(feature: Dict) -> Dict:
     return result
 
 
-def save_download_result(result: Dict, output_folder: Path) -> Path:
-    output_file = output_folder / "download_result.json"
+def save_download_result(result: Dict, output_folder: Path, label: str) -> Path:
+    output_file = output_folder / f"download_result_{label}.json"
 
     with output_file.open("w", encoding="utf-8") as file:
         json.dump(result, file, indent=4, ensure_ascii=False)
@@ -175,27 +198,27 @@ def save_download_result(result: Dict, output_folder: Path) -> Path:
     return output_file
 
 
-def print_stac_result_summary(feature: Dict, result_file: Path) -> None:
+def print_stac_result_summary(feature: Dict, result_file: Path, label: str) -> None:
     properties = feature.get("properties", {})
 
-    print("\n=== Valódi STAC találat ===")
+    print(f"\n=== Valódi STAC találat ({label}) ===")
     print(f"ID: {feature.get('id')}")
     print(f"Kollekció: {feature.get('collection')}")
     print(f"Dátum: {properties.get('datetime')}")
     print(f"Felhőborítottság: {properties.get('eo:cloud_cover')}%")
     print(f"Mentve ide: {result_file.resolve()}")
-    print("===========================\n")
+    print("====================================\n")
 
 
 def print_download_summary(result: Dict, output_file: Path) -> None:
-    print("\n=== Letöltési összegzés ===")
+    print(f"\n=== Letöltési összegzés ({result['label']}) ===")
     print(f"Státusz: {result['status']}")
     print(f"Jelenet azonosító: {result['id']}")
     print(f"Dátum: {result['datetime']}")
     print(f"Felhőborítottság: {result['cloud_cover']}%")
     print(f"Elérhető assetek: {', '.join(result['assets'])}")
     print(f"Kimeneti fájl: {output_file.resolve()}")
-    print("===========================\n")
+    print("====================================\n")
 
 
 def select_preview_asset(feature: Dict) -> Tuple[str, Dict]:
@@ -251,7 +274,7 @@ def guess_extension(asset: Dict, url: str, content_type: Optional[str]) -> str:
     return ".jpg"
 
 
-def download_preview_image(feature: Dict, output_folder: Path) -> Dict:
+def download_preview_image(feature: Dict, output_folder: Path, label: str) -> Dict:
     asset_key, asset = select_preview_asset(feature)
     url = asset["href"]
 
@@ -270,7 +293,7 @@ def download_preview_image(feature: Dict, output_folder: Path) -> Dict:
 
     content_type = response.headers.get("Content-Type")
     extension = guess_extension(asset, url, content_type)
-    output_file = output_folder / f"preview{extension}"
+    output_file = output_folder / f"preview_{label}{extension}"
 
     with output_file.open("wb") as file:
         for chunk in response.iter_content(chunk_size=8192):
@@ -278,6 +301,7 @@ def download_preview_image(feature: Dict, output_folder: Path) -> Dict:
                 file.write(chunk)
 
     result = {
+        "label": label,
         "status": "downloaded",
         "asset_key": asset_key,
         "source_url": url,
@@ -286,7 +310,7 @@ def download_preview_image(feature: Dict, output_folder: Path) -> Dict:
         "file_size_bytes": output_file.stat().st_size,
     }
 
-    result_file = output_folder / "preview_download.json"
+    result_file = output_folder / f"preview_download_{label}.json"
     with result_file.open("w", encoding="utf-8") as file:
         json.dump(result, file, indent=4, ensure_ascii=False)
 
@@ -294,9 +318,27 @@ def download_preview_image(feature: Dict, output_folder: Path) -> Dict:
 
 
 def print_preview_download_summary(result: Dict) -> None:
-    print("\n=== Preview kép letöltve ===")
+    print(f"\n=== Preview kép letöltve ({result['label']}) ===")
     print(f"Asset kulcs: {result['asset_key']}")
     print(f"Tartalomtípus: {result['content_type']}")
     print(f"Fájlméret: {result['file_size_bytes']} bájt")
     print(f"Kimeneti fájl: {Path(result['output_file']).resolve()}")
-    print("============================\n")
+    print("====================================\n")
+
+
+def get_comparison_ranges(config: Dict) -> Dict[str, Dict[str, str]]:
+    comparison = config.get("comparison")
+
+    if not comparison:
+        raise ValueError("Hiányzik a 'comparison' blokk a config.yaml fájlból.")
+
+    if "before" not in comparison or "after" not in comparison:
+        raise ValueError("A comparison blokkban kell 'before' és 'after' rész.")
+
+    for label in ["before", "after"]:
+        if "start_date" not in comparison[label] or "end_date" not in comparison[label]:
+            raise ValueError(
+                f"Hiányzó start_date vagy end_date a comparison/{label} részben."
+            )
+
+    return comparison
