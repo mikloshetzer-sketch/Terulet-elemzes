@@ -19,6 +19,10 @@ from data_fetch import (
     print_preview_download_summary,
     get_comparison_ranges,
 )
+from compare_images import (
+    create_side_by_side_comparison,
+    print_comparison_summary,
+)
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -127,7 +131,7 @@ def process_period(
     config: dict,
     aoi: dict,
     output_folder: Path,
-) -> None:
+) -> Path:
     feature = search_sentinel_data(config, aoi, start_date, end_date)
     stac_result_file = save_stac_result(feature, output_folder, label)
     print_stac_result_summary(feature, stac_result_file, label)
@@ -138,6 +142,8 @@ def process_period(
 
     preview_result = download_preview_image(feature, output_folder, label)
     print_preview_download_summary(preview_result)
+
+    return Path(preview_result["output_file"])
 
 
 def main() -> None:
@@ -162,7 +168,7 @@ def main() -> None:
 
         comparison = get_comparison_ranges(config)
 
-        process_period(
+        before_preview = process_period(
             "before",
             comparison["before"]["start_date"],
             comparison["before"]["end_date"],
@@ -171,7 +177,7 @@ def main() -> None:
             output_folder,
         )
 
-        process_period(
+        after_preview = process_period(
             "after",
             comparison["after"]["start_date"],
             comparison["after"]["end_date"],
@@ -180,10 +186,20 @@ def main() -> None:
             output_folder,
         )
 
+        comparison_file = create_side_by_side_comparison(
+            str(before_preview),
+            str(after_preview),
+            output_folder,
+            before_label="BEFORE",
+            after_label="AFTER",
+        )
+        print_comparison_summary(comparison_file)
+
         print("AOI sikeresen létrehozva és elmentve.")
         print("Adatlekérés előkészítve.")
         print("Before/after STAC találatok sikeresen lekérve.")
         print("Before/after preview képek sikeresen letöltve.")
+        print("Összehasonlító kép sikeresen elkészült.")
 
     except Exception as error:
         print(f"Hiba: {error}")
