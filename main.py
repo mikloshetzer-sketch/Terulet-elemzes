@@ -17,6 +17,7 @@ from data_fetch import (
     print_download_summary,
     download_preview_image,
     print_preview_download_summary,
+    get_comparison_ranges,
 )
 
 
@@ -41,6 +42,7 @@ def validate_config(config: dict) -> None:
         "location",
         "area_of_interest",
         "time_range",
+        "comparison",
         "data_source",
         "analysis",
         "output",
@@ -75,6 +77,13 @@ def validate_config(config: dict) -> None:
         if key not in config["output"]:
             raise ValueError(f"Hiányzó output mező: {key}")
 
+    comparison = config["comparison"]
+    for label in ["before", "after"]:
+        if label not in comparison:
+            raise ValueError(f"Hiányzó comparison mező: {label}")
+        if "start_date" not in comparison[label] or "end_date" not in comparison[label]:
+            raise ValueError(f"Hiányzó dátummező a comparison/{label} blokkban.")
+
 
 def prepare_output_folder(config: dict) -> Path:
     output_folder = Path(config["output"]["folder"])
@@ -92,8 +101,16 @@ def print_project_summary(config: dict, output_folder: Path) -> None:
     )
     print(f"Vizsgálati sugár (km): {config['area_of_interest']['buffer_km']}")
     print(
-        f"Időszak: {config['time_range']['start_date']} → "
+        f"Fő időszak: {config['time_range']['start_date']} → "
         f"{config['time_range']['end_date']}"
+    )
+    print(
+        f"Before: {config['comparison']['before']['start_date']} → "
+        f"{config['comparison']['before']['end_date']}"
+    )
+    print(
+        f"After: {config['comparison']['after']['start_date']} → "
+        f"{config['comparison']['after']['end_date']}"
     )
     print(f"Adatforrás: {config['data_source']['satellite']}")
     print(f"Max. felhőborítottság: {config['data_source']['cloud_cover_max']}%")
@@ -101,6 +118,26 @@ def print_project_summary(config: dict, output_folder: Path) -> None:
     print(f"Felbontás: {config['analysis']['output_resolution_m']} m")
     print(f"Kimeneti mappa: {output_folder.resolve()}")
     print("=========================\n")
+
+
+def process_period(
+    label: str,
+    start_date: str,
+    end_date: str,
+    config: dict,
+    aoi: dict,
+    output_folder: Path,
+) -> None:
+    feature = search_sentinel_data(config, aoi, start_date, end_date)
+    stac_result_file = save_stac_result(feature, output_folder, label)
+    print_stac_result_summary(feature, stac_result_file, label)
+
+    download_result = build_download_result(feature, label)
+    download_result_file = save_download_result(download_result, output_folder, label)
+    print_download_summary(download_result, download_result_file)
+
+    preview_result = download_preview_image(feature, output_folder, label)
+    print_preview_download_summary(preview_result)
 
 
 def main() -> None:
@@ -123,21 +160,30 @@ def main() -> None:
         data_request_file = save_data_request(data_request, output_folder)
         print_data_request_summary(data_request, data_request_file)
 
-        feature = search_sentinel_data(config, aoi)
-        stac_result_file = save_stac_result(feature, output_folder)
-        print_stac_result_summary(feature, stac_result_file)
+        comparison = get_comparison_ranges(config)
 
-        download_result = build_download_result(feature)
-        download_result_file = save_download_result(download_result, output_folder)
-        print_download_summary(download_result, download_result_file)
+        process_period(
+            "before",
+            comparison["before"]["start_date"],
+            comparison["before"]["end_date"],
+            config,
+            aoi,
+            output_folder,
+        )
 
-        preview_result = download_preview_image(feature, output_folder)
-        print_preview_download_summary(preview_result)
+        process_period(
+            "after",
+            comparison["after"]["start_date"],
+            comparison["after"]["end_date"],
+            config,
+            aoi,
+            output_folder,
+        )
 
         print("AOI sikeresen létrehozva és elmentve.")
         print("Adatlekérés előkészítve.")
-        print("Valódi STAC találat sikeresen lekérve.")
-        print("Preview kép sikeresen letöltve.")
+        print("Before/after STAC találatok sikeresen lekérve.")
+        print("Before/after preview képek sikeresen letöltve.")
 
     except Exception as error:
         print(f"Hiba: {error}")
