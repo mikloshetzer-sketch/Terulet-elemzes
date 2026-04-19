@@ -9,7 +9,11 @@ from data_fetch import (
     build_data_request,
     save_data_request,
     print_data_request_summary,
-    fetch_true_color_preview,
+    search_sentinel_data,
+    save_stac_result,
+    build_download_result,
+    save_download_result,
+    print_stac_result_summary,
     print_download_summary,
 )
 
@@ -112,16 +116,22 @@ def main() -> None:
         print_save_confirmation(aoi_file)
 
         aoi = load_aoi(aoi_file)
+
         data_request = build_data_request(config, aoi)
         data_request_file = save_data_request(data_request, output_folder)
         print_data_request_summary(data_request, data_request_file)
 
-        download_result = fetch_true_color_preview(config, aoi, output_folder)
-        print_download_summary(download_result)
+        feature = search_sentinel_data(config, aoi)
+        stac_result_file = save_stac_result(feature, output_folder)
+        print_stac_result_summary(feature, stac_result_file)
+
+        download_result = build_download_result(feature)
+        download_result_file = save_download_result(download_result, output_folder)
+        print_download_summary(download_result, download_result_file)
 
         print("AOI sikeresen létrehozva és elmentve.")
         print("Adatlekérés előkészítve.")
-        print("Valódi műholdkép sikeresen letöltve.")
+        print("Valódi STAC találat sikeresen lekérve.")
 
     except Exception as error:
         print(f"Hiba: {error}")
