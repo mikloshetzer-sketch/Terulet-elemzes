@@ -142,25 +142,43 @@ def search_sentinel_data(
             f"Nincs találat a megadott paraméterekre: {start_date} → {end_date}"
         )
 
+    all_features = sorted(
+        data["features"],
+        key=lambda feature: feature.get("properties", {}).get("eo:cloud_cover", 100),
+    )
+
     max_cloud = config["data_source"]["cloud_cover_max"]
     filtered = [
         feature
-        for feature in data["features"]
+        for feature in all_features
         if feature.get("properties", {}).get("eo:cloud_cover", 100) <= max_cloud
     ]
 
-    if not filtered:
-        raise RuntimeError(
-            "A STAC keresés adott találatokat, de egyik sem felel meg "
-            "a beállított felhőborítottsági küszöbnek."
-        )
+    if filtered:
+        best_feature = filtered[0]
+        best_feature["_selection_info"] = {
+            "mode": "strict",
+            "cloud_threshold": max_cloud,
+            "matched_threshold": True,
+        }
+        return best_feature
 
-    best_feature = sorted(
-        filtered,
-        key=lambda feature: feature.get("properties", {}).get("eo:cloud_cover", 100),
-    )[0]
+    fallback_feature = all_features[0]
+    fallback_cloud = fallback_feature.get("properties", {}).get("eo:cloud_cover", 100)
+    fallback_feature["_selection_info"] = {
+        "mode": "fallback_best_available",
+        "cloud_threshold": max_cloud,
+        "matched_threshold": False,
+        "selected_cloud_cover": fallback_cloud,
+    }
 
-    return best_feature
+    print(
+        f"Figyelem: nincs {max_cloud}% alatti találat a "
+        f"{start_date} → {end_date} időszakban. "
+        f"A legjobb elérhető jelenet lesz használva ({fallback_cloud}%)."
+    )
+
+    return fallback_feature
 
 
 def save_stac_result(feature: Dict, output_folder: Path, label: str) -> Path:
@@ -175,6 +193,7 @@ def save_stac_result(feature: Dict, output_folder: Path, label: str) -> Path:
 def build_download_result(feature: Dict, label: str) -> Dict:
     properties = feature.get("properties", {})
     assets = feature.get("assets", {})
+    selection_info = feature.get("_selection_info", {})
 
     result = {
         "label": label,
@@ -184,6 +203,7 @@ def build_download_result(feature: Dict, label: str) -> Dict:
         "datetime": properties.get("datetime"),
         "cloud_cover": properties.get("eo:cloud_cover"),
         "assets": list(assets.keys()),
+        "selection_info": selection_info,
     }
 
     return result
@@ -200,22 +220,27 @@ def save_download_result(result: Dict, output_folder: Path, label: str) -> Path:
 
 def print_stac_result_summary(feature: Dict, result_file: Path, label: str) -> None:
     properties = feature.get("properties", {})
+    selection_info = feature.get("_selection_info", {})
 
     print(f"\n=== Valódi STAC találat ({label}) ===")
     print(f"ID: {feature.get('id')}")
     print(f"Kollekció: {feature.get('collection')}")
     print(f"Dátum: {properties.get('datetime')}")
     print(f"Felhőborítottság: {properties.get('eo:cloud_cover')}%")
+    print(f"Kiválasztási mód: {selection_info.get('mode', 'unknown')}")
     print(f"Mentve ide: {result_file.resolve()}")
     print("====================================\n")
 
 
 def print_download_summary(result: Dict, output_file: Path) -> None:
+    selection_info = result.get("selection_info", {})
+
     print(f"\n=== Letöltési összegzés ({result['label']}) ===")
     print(f"Státusz: {result['status']}")
     print(f"Jelenet azonosító: {result['id']}")
     print(f"Dátum: {result['datetime']}")
     print(f"Felhőborítottság: {result['cloud_cover']}%")
+    print(f"Kiválasztási mód: {selection_info.get('mode', 'unknown')}")
     print(f"Elérhető assetek: {', '.join(result['assets'])}")
     print(f"Kimeneti fájl: {output_file.resolve()}")
     print("====================================\n")
