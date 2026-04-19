@@ -1,8 +1,13 @@
 import json
 from pathlib import Path
 from typing import Dict
+from urllib.parse import urlencode
 
 import requests
+
+
+STAC_BASE_URL = "https://stac.dataspace.copernicus.eu/v1"
+STAC_SEARCH_URL = f"{STAC_BASE_URL}/search"
 
 
 def load_aoi(aoi_path: str = "output/aoi.json") -> Dict:
@@ -67,42 +72,40 @@ def print_data_request_summary(request: Dict, output_file: Path) -> None:
     print("==============================\n")
 
 
-def build_stac_search_payload(config: Dict, aoi: Dict) -> Dict:
-    bbox = [
-        aoi["min_lon"],
-        aoi["min_lat"],
-        aoi["max_lon"],
-        aoi["max_lat"],
-    ]
+def build_stac_search_params(config: Dict, aoi: Dict) -> Dict[str, str]:
+    bbox = ",".join(
+        [
+            str(aoi["min_lon"]),
+            str(aoi["min_lat"]),
+            str(aoi["max_lon"]),
+            str(aoi["max_lat"]),
+        ]
+    )
 
-    payload = {
-        "collections": ["sentinel-2-l2a"],
+    # A dokumentáció szerinti egyszerű GET keresés paraméterei
+    params = {
         "bbox": bbox,
-        "limit": 5,
         "datetime": (
-            f"{config['time_range']['start_date']}/"
-            f"{config['time_range']['end_date']}"
+            f"{config['time_range']['start_date']}T00:00:00Z/"
+            f"{config['time_range']['end_date']}T23:59:59Z"
         ),
-        "query": {
-            "eo:cloud_cover": {
-                "lt": config["data_source"]["cloud_cover_max"]
-            }
-        },
+        "collections": "sentinel-2-l2a",
+        "limit": "5",
     }
-
-    return payload
+    return params
 
 
 def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
-    url = "https://catalogue.dataspace.copernicus.eu/stac/search"
-    payload = build_stac_search_payload(config, aoi)
+    params = build_stac_search_params(config, aoi)
 
-    response = requests.post(url, json=payload, timeout=60)
+    response = requests.get(STAC_SEARCH_URL, params=params, timeout=60)
 
     if response.status_code != 200:
+        full_url = f"{STAC_SEARCH_URL}?{urlencode(params)}"
         raise RuntimeError(
             f"Hiba a STAC lekérdezésnél. "
-            f"HTTP {response.status_code}: {response.text}"
+            f"HTTP {response.status_code}: {response.text}\n"
+            f"Használt URL: {full_url}"
         )
 
     data = response.json()
@@ -113,7 +116,26 @@ def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
     if not data["features"]:
         raise RuntimeError("Nincs találat a megadott paraméterekre.")
 
-    return data["features"][0]
+    # Felhőborítottság alapján kiválasztjuk a legjobb találatot helyben
+    max_cloud = config["data_source"]["cloud_cover_max"]
+    filtered = [
+        feature
+        for feature in data["features"]
+        if feature.get("properties", {}).get("eo:cloud_cover", 100) <= max_cloud
+    ]
+
+    if not filtered:
+        raise RuntimeError(
+            "A STAC keresés adott találatokat, de egyik sem felel meg "
+            "a beállított felhőborítottsági küszöbnek."
+        )
+
+    best_feature = sorted(
+        filtered,
+        key=lambda feature: feature.get("properties", {}).get("eo:cloud_cover", 100),
+    )[0]
+
+    return best_feature
 
 
 def save_stac_result(feature: Dict, output_folder: Path) -> Path:
