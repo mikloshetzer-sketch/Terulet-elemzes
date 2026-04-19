@@ -12,6 +12,14 @@ time_range:
   start_date: "2018-01-01"
   end_date: "2025-01-01"
 
+comparison:
+  before:
+    start_date: "2018-01-01"
+    end_date: "2018-12-31"
+  after:
+    start_date: "2024-01-01"
+    end_date: "2024-12-31"
+
 data_source:
   satellite: "sentinel-2"
   cloud_cover_max: 20
