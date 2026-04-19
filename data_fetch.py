@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
-from typing import Dict
-from urllib.parse import urlencode
+from typing import Dict, Optional, Tuple
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -82,7 +82,6 @@ def build_stac_search_params(config: Dict, aoi: Dict) -> Dict[str, str]:
         ]
     )
 
-    # A dokumentáció szerinti egyszerű GET keresés paraméterei
     params = {
         "bbox": bbox,
         "datetime": (
@@ -98,7 +97,12 @@ def build_stac_search_params(config: Dict, aoi: Dict) -> Dict[str, str]:
 def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
     params = build_stac_search_params(config, aoi)
 
-    response = requests.get(STAC_SEARCH_URL, params=params, timeout=60)
+    response = requests.get(
+        STAC_SEARCH_URL,
+        params=params,
+        timeout=60,
+        headers={"User-Agent": "area-analysis-pipeline/1.0"},
+    )
 
     if response.status_code != 200:
         full_url = f"{STAC_SEARCH_URL}?{urlencode(params)}"
@@ -116,7 +120,6 @@ def search_sentinel_data(config: Dict, aoi: Dict) -> Dict:
     if not data["features"]:
         raise RuntimeError("Nincs találat a megadott paraméterekre.")
 
-    # Felhőborítottság alapján kiválasztjuk a legjobb találatot helyben
     max_cloud = config["data_source"]["cloud_cover_max"]
     filtered = [
         feature
@@ -193,3 +196,107 @@ def print_download_summary(result: Dict, output_file: Path) -> None:
     print(f"Elérhető assetek: {', '.join(result['assets'])}")
     print(f"Kimeneti fájl: {output_file.resolve()}")
     print("===========================\n")
+
+
+def select_preview_asset(feature: Dict) -> Tuple[str, Dict]:
+    assets = feature.get("assets", {})
+
+    preferred_keys = [
+        "rendered_preview",
+        "visual",
+        "thumbnail",
+        "overview",
+        "preview",
+    ]
+
+    for key in preferred_keys:
+        asset = assets.get(key)
+        if asset and asset.get("href"):
+            return key, asset
+
+    for key, asset in assets.items():
+        href = asset.get("href", "")
+        if href.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            return key, asset
+
+    raise RuntimeError(
+        "Nem található közvetlen preview asset a STAC találatban. "
+        f"Elérhető assetek: {', '.join(assets.keys())}"
+    )
+
+
+def guess_extension(asset: Dict, url: str, content_type: Optional[str]) -> str:
+    if content_type:
+        normalized = content_type.lower()
+        if "image/jpeg" in normalized:
+            return ".jpg"
+        if "image/png" in normalized:
+            return ".png"
+        if "image/webp" in normalized:
+            return ".webp"
+
+    parsed = urlparse(url)
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix in {".jpg", ".jpeg", ".png", ".webp"}:
+        return ".jpg" if suffix == ".jpeg" else suffix
+
+    asset_type = str(asset.get("type", "")).lower()
+    if "jpeg" in asset_type:
+        return ".jpg"
+    if "png" in asset_type:
+        return ".png"
+    if "webp" in asset_type:
+        return ".webp"
+
+    return ".jpg"
+
+
+def download_preview_image(feature: Dict, output_folder: Path) -> Dict:
+    asset_key, asset = select_preview_asset(feature)
+    url = asset["href"]
+
+    response = requests.get(
+        url,
+        timeout=120,
+        stream=True,
+        headers={"User-Agent": "area-analysis-pipeline/1.0"},
+    )
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Hiba a preview kép letöltésénél. "
+            f"HTTP {response.status_code}: {response.text[:300]}"
+        )
+
+    content_type = response.headers.get("Content-Type")
+    extension = guess_extension(asset, url, content_type)
+    output_file = output_folder / f"preview{extension}"
+
+    with output_file.open("wb") as file:
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                file.write(chunk)
+
+    result = {
+        "status": "downloaded",
+        "asset_key": asset_key,
+        "source_url": url,
+        "content_type": content_type,
+        "output_file": str(output_file),
+        "file_size_bytes": output_file.stat().st_size,
+    }
+
+    result_file = output_folder / "preview_download.json"
+    with result_file.open("w", encoding="utf-8") as file:
+        json.dump(result, file, indent=4, ensure_ascii=False)
+
+    return result
+
+
+def print_preview_download_summary(result: Dict) -> None:
+    print("\n=== Preview kép letöltve ===")
+    print(f"Asset kulcs: {result['asset_key']}")
+    print(f"Tartalomtípus: {result['content_type']}")
+    print(f"Fájlméret: {result['file_size_bytes']} bájt")
+    print(f"Kimeneti fájl: {Path(result['output_file']).resolve()}")
+    print("============================\n")
