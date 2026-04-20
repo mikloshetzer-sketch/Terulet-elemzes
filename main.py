@@ -187,7 +187,10 @@ def main() -> None:
         output_folder = prepare_output_folder(config)
 
         print_project_summary(config, output_folder)
-        print(f"DEBUG - config buffer_km érték: {config['area_of_interest']['buffer_km']}")
+        print(
+            f"DEBUG - config buffer_km érték: "
+            f"{config['area_of_interest']['buffer_km']}"
+        )
 
         bbox = build_bounding_box(config)
         print_bounding_box_summary(bbox)
@@ -230,16 +233,17 @@ def main() -> None:
         )
         print_comparison_summary(comparison_file)
 
-        ndvi_comparison_file = create_side_by_side_comparison(
+        ndvi_temp_file = create_side_by_side_comparison(
             str(before_result["ndvi_path"]),
             str(after_result["ndvi_path"]),
             output_folder,
-            before_label="NDVI BEFORE",
-            after_label="NDVI AFTER",
+            before_label="URBAN BEFORE",
+            after_label="URBAN AFTER",
         )
-        ndvi_side_by_side = output_folder / "ndvi_side_by_side.jpg"
-        ndvi_side_by_side.write_bytes(ndvi_comparison_file.read_bytes())
-        print(f"NDVI összehasonlító kép mentve: {ndvi_side_by_side.resolve()}")
+
+        urban_side_by_side = output_folder / "urban_side_by_side.jpg"
+        urban_side_by_side.write_bytes(ndvi_temp_file.read_bytes())
+        print(f"Urban összehasonlító kép mentve: {urban_side_by_side.resolve()}")
 
         change_map_file = create_change_map(
             before_result["ndvi_path"],
@@ -253,7 +257,7 @@ def main() -> None:
         print("Before/after STAC találatok sikeresen lekérve.")
         print("Before/after preview képek sikeresen letöltve.")
         print("Before/after high-res AOI képek sikeresen elkészültek.")
-        print("Before/after NDVI képek sikeresen elkészültek.")
+        print("Urban index képek sikeresen elkészültek.")
         print("Összehasonlító képek sikeresen elkészültek.")
         print("Change map sikeresen elkészült.")
 
