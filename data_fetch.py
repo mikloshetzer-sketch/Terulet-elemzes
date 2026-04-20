@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import requests
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFilter
 from shapely.geometry import box, shape
 
 
@@ -491,7 +491,7 @@ function evaluatePixel(sample) {
   } else if (ndbi < -0.2) {
     return [0.0, 1.0, 0.0];
   } else {
-    return [0.3, 0.3, 0.3];
+    return [0.25, 0.25, 0.25];
   }
 }
 """
@@ -641,16 +641,20 @@ def create_change_map(
     after_image_path: Path,
     output_folder: Path,
 ) -> Path:
-    before_img = Image.open(before_image_path).convert("RGB")
-    after_img = Image.open(after_image_path).convert("RGB")
+    before_img = Image.open(before_image_path).convert("L")
+    after_img = Image.open(after_image_path).convert("L")
 
     if before_img.size != after_img.size:
         after_img = after_img.resize(before_img.size)
 
     diff = ImageChops.difference(before_img, after_img)
-    diff = diff.point(lambda p: min(255, int(p * 3.0)))
 
-    output_file = output_folder / "urban_change_map.png"
+    threshold = 25
+    diff = diff.point(lambda p: 255 if p > threshold else 0)
+
+    diff = diff.filter(ImageFilter.MedianFilter(size=3))
+
+    output_file = output_folder / "urban_change_map_clean.png"
     diff.save(output_file)
 
     return output_file
