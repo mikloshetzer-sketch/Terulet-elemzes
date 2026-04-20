@@ -6,6 +6,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import requests
+from shapely.geometry import box, shape
 
 
 STAC_BASE_URL = "https://stac.dataspace.copernicus.eu/v1"
@@ -112,9 +113,31 @@ def build_stac_search_params(
         "bbox": bbox,
         "datetime": f"{start_date}T00:00:00Z/{end_date}T23:59:59Z",
         "collections": "sentinel-2-l2a",
-        "limit": "10",
+        "limit": "20",
     }
     return params
+
+
+def _aoi_polygon(aoi: Dict):
+    return box(
+        aoi["min_lon"],
+        aoi["min_lat"],
+        aoi["max_lon"],
+        aoi["max_lat"],
+    )
+
+
+def _feature_fully_covers_aoi(feature: Dict, aoi: Dict) -> bool:
+    geometry = feature.get("geometry")
+    if not geometry:
+        return False
+
+    try:
+        feature_geom = shape(geometry)
+        aoi_geom = _aoi_polygon(aoi)
+        return feature_geom.contains(aoi_geom) or feature_geom.covers(aoi_geom)
+    except Exception:
+        return False
 
 
 def search_sentinel_data(
@@ -155,35 +178,52 @@ def search_sentinel_data(
         key=lambda feature: feature.get("properties", {}).get("eo:cloud_cover", 100),
     )
 
+    # 1) Csak azok maradjanak, amelyek teljesen lefedik az AOI-t
+    covering_features = [
+        feature
+        for feature in all_features
+        if _feature_fully_covers_aoi(feature, aoi)
+    ]
+
+    if not covering_features:
+        raise RuntimeError(
+            "A találatok között nincs olyan jelenet, amely teljesen lefedné az AOI-t. "
+            "Ezért kaptál fekete, ferde képet. "
+            "Ilyenkor más időszak vagy másik helyszín-/AOI-beállítás kell."
+        )
+
+    # 2) Ezek közül jön a felhőszűrés
     max_cloud = config["data_source"]["cloud_cover_max"]
     filtered = [
         feature
-        for feature in all_features
+        for feature in covering_features
         if feature.get("properties", {}).get("eo:cloud_cover", 100) <= max_cloud
     ]
 
     if filtered:
         best_feature = filtered[0]
         best_feature["_selection_info"] = {
-            "mode": "strict",
+            "mode": "strict_full_coverage",
             "cloud_threshold": max_cloud,
             "matched_threshold": True,
+            "full_aoi_coverage": True,
         }
         return best_feature
 
-    fallback_feature = all_features[0]
+    fallback_feature = covering_features[0]
     fallback_cloud = fallback_feature.get("properties", {}).get("eo:cloud_cover", 100)
     fallback_feature["_selection_info"] = {
-        "mode": "fallback_best_available",
+        "mode": "fallback_best_available_full_coverage",
         "cloud_threshold": max_cloud,
         "matched_threshold": False,
         "selected_cloud_cover": fallback_cloud,
+        "full_aoi_coverage": True,
     }
 
     print(
-        f"Figyelem: nincs {max_cloud}% alatti találat a "
+        f"Figyelem: nincs {max_cloud}% alatti, teljes AOI-t lefedő találat a "
         f"{start_date} → {end_date} időszakban. "
-        f"A legjobb elérhető jelenet lesz használva ({fallback_cloud}%)."
+        f"A legjobb elérhető, teljes lefedésű jelenet lesz használva ({fallback_cloud}%)."
     )
 
     return fallback_feature
