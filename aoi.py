@@ -3,16 +3,10 @@ from typing import Dict
 
 
 def km_to_latitude_degrees(km: float) -> float:
-    """
-    1 szélességi fok kb. 111.32 km.
-    """
     return km / 111.32
 
 
 def km_to_longitude_degrees(km: float, latitude: float) -> float:
-    """
-    A hosszúsági fok távolsága függ a földrajzi szélességtől.
-    """
     latitude_rad = radians(latitude)
     longitude_km_per_degree = 111.32 * cos(latitude_rad)
 
@@ -23,13 +17,9 @@ def km_to_longitude_degrees(km: float, latitude: float) -> float:
 
 
 def build_bounding_box(config: Dict) -> Dict:
-    """
-    A konfiguráció alapján létrehoz egy befoglaló téglalapot:
-    min_lat, max_lat, min_lon, max_lon
-    """
-    latitude = config["location"]["latitude"]
-    longitude = config["location"]["longitude"]
-    buffer_km = config["area_of_interest"]["buffer_km"]
+    latitude = float(config["location"]["latitude"])
+    longitude = float(config["location"]["longitude"])
+    buffer_km = float(config["area_of_interest"]["buffer_km"])
 
     lat_offset = km_to_latitude_degrees(buffer_km)
     lon_offset = km_to_longitude_degrees(buffer_km, latitude)
