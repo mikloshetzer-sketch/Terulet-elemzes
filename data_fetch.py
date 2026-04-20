@@ -1,9 +1,21 @@
 import json
+import os
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
+import numpy as np
 import requests
+from PIL import Image
+from sentinelhub import (
+    BBox,
+    CRS,
+    DataCollection,
+    MimeType,
+    SHConfig,
+    SentinelHubRequest,
+    bbox_to_dimensions,
+)
 
 
 STAC_BASE_URL = "https://stac.dataspace.copernicus.eu/v1"
@@ -367,3 +379,113 @@ def get_comparison_ranges(config: Dict) -> Dict[str, Dict[str, str]]:
             )
 
     return comparison
+
+
+def get_sentinelhub_config() -> SHConfig:
+    config = SHConfig()
+
+    config.sh_client_id = os.getenv("SENTINELHUB_CLIENT_ID")
+    config.sh_client_secret = os.getenv("SENTINELHUB_CLIENT_SECRET")
+    config.sh_base_url = "https://sh.dataspace.copernicus.eu"
+
+    if not config.sh_client_id or not config.sh_client_secret:
+        raise RuntimeError(
+            "Hiányzik a Sentinel Hub hitelesítés. "
+            "Állítsd be a SENTINELHUB_CLIENT_ID és "
+            "SENTINELHUB_CLIENT_SECRET környezeti változókat."
+        )
+
+    return config
+
+
+def aoi_to_bbox(aoi: Dict) -> BBox:
+    return BBox(
+        bbox=(aoi["min_lon"], aoi["min_lat"], aoi["max_lon"], aoi["max_lat"]),
+        crs=CRS.WGS84,
+    )
+
+
+def get_true_color_evalscript() -> str:
+    return """
+//VERSION=3
+function setup() {
+  return {
+    input: ["B02", "B03", "B04", "dataMask"],
+    output: { bands: 4, sampleType: "AUTO" }
+  };
+}
+
+function evaluatePixel(sample) {
+  return [sample.B04, sample.B03, sample.B02, sample.dataMask];
+}
+"""
+
+
+def fetch_high_res_image(
+    config_dict: Dict,
+    aoi: Dict,
+    feature: Dict,
+    label: str,
+    output_folder: Path,
+) -> Path:
+    sh_config = get_sentinelhub_config()
+    bbox = aoi_to_bbox(aoi)
+    resolution = config_dict["analysis"]["output_resolution_m"]
+    size = bbox_to_dimensions(bbox, resolution=resolution)
+
+    feature_datetime = feature.get("properties", {}).get("datetime")
+    if not feature_datetime:
+        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+
+    date_only = feature_datetime[:10]
+
+    request = SentinelHubRequest(
+        evalscript=get_true_color_evalscript(),
+        input_data=[
+            SentinelHubRequest.input_data(
+                data_collection=DataCollection.SENTINEL2_L2A,
+                time_interval=(date_only, date_only),
+            )
+        ],
+        responses=[
+            SentinelHubRequest.output_response("default", MimeType.PNG)
+        ],
+        bbox=bbox,
+        size=size,
+        config=sh_config,
+    )
+
+    data = request.get_data()
+
+    if not data:
+        raise RuntimeError("Nem érkezett high-res kép a Sentinel Hub lekérdezésből.")
+
+    image = data[0]
+
+    if image.dtype != np.uint8:
+        image = np.clip(image * 255, 0, 255).astype(np.uint8)
+
+    img = Image.fromarray(image)
+    output_file = output_folder / f"highres_{label}.png"
+    img.save(output_file)
+
+    metadata = {
+        "label": label,
+        "datetime": feature_datetime,
+        "output_file": str(output_file),
+        "width_px": img.width,
+        "height_px": img.height,
+        "resolution_m": resolution,
+    }
+
+    metadata_file = output_folder / f"highres_{label}.json"
+    with metadata_file.open("w", encoding="utf-8") as file:
+        json.dump(metadata, file, indent=4, ensure_ascii=False)
+
+    return output_file
+
+
+def print_high_res_summary(label: str, image_path: Path) -> None:
+    print(f"\n=== High-res AOI kép elkészült ({label}) ===")
+    print(f"Kimeneti fájl: {image_path.resolve()}")
+    print("==========================================\n")
