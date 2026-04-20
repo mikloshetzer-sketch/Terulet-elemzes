@@ -5,19 +5,21 @@ import yaml
 from aoi import build_bounding_box, print_bounding_box_summary
 from save_aoi import save_aoi_to_json, print_save_confirmation
 from data_fetch import (
-    load_aoi,
     build_data_request,
-    save_data_request,
-    print_data_request_summary,
-    search_sentinel_data,
-    save_stac_result,
-    build_download_result,
-    save_download_result,
-    print_stac_result_summary,
-    print_download_summary,
     download_preview_image,
-    print_preview_download_summary,
+    fetch_high_res_image,
     get_comparison_ranges,
+    load_aoi,
+    print_data_request_summary,
+    print_download_summary,
+    print_high_res_summary,
+    print_preview_download_summary,
+    print_stac_result_summary,
+    save_data_request,
+    save_download_result,
+    save_stac_result,
+    search_sentinel_data,
+    build_download_result,
 )
 from compare_images import (
     create_side_by_side_comparison,
@@ -143,7 +145,16 @@ def process_period(
     preview_result = download_preview_image(feature, output_folder, label)
     print_preview_download_summary(preview_result)
 
-    return Path(preview_result["output_file"])
+    highres_path = fetch_high_res_image(
+        config_dict=config,
+        aoi=aoi,
+        feature=feature,
+        label=label,
+        output_folder=output_folder,
+    )
+    print_high_res_summary(label, highres_path)
+
+    return highres_path
 
 
 def main() -> None:
@@ -168,7 +179,7 @@ def main() -> None:
 
         comparison = get_comparison_ranges(config)
 
-        before_preview = process_period(
+        before_highres = process_period(
             "before",
             comparison["before"]["start_date"],
             comparison["before"]["end_date"],
@@ -177,7 +188,7 @@ def main() -> None:
             output_folder,
         )
 
-        after_preview = process_period(
+        after_highres = process_period(
             "after",
             comparison["after"]["start_date"],
             comparison["after"]["end_date"],
@@ -187,8 +198,8 @@ def main() -> None:
         )
 
         comparison_file = create_side_by_side_comparison(
-            str(before_preview),
-            str(after_preview),
+            str(before_highres),
+            str(after_highres),
             output_folder,
             before_label="BEFORE",
             after_label="AFTER",
@@ -199,6 +210,7 @@ def main() -> None:
         print("Adatlekérés előkészítve.")
         print("Before/after STAC találatok sikeresen lekérve.")
         print("Before/after preview képek sikeresen letöltve.")
+        print("Before/after high-res AOI képek sikeresen elkészültek.")
         print("Összehasonlító kép sikeresen elkészült.")
 
     except Exception as error:
