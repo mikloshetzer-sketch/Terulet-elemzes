@@ -384,16 +384,23 @@ def get_comparison_ranges(config: Dict) -> Dict[str, Dict[str, str]]:
 def get_sentinelhub_config() -> SHConfig:
     config = SHConfig()
 
-    config.sh_client_id = os.getenv("SENTINELHUB_CLIENT_ID")
-    config.sh_client_secret = os.getenv("SENTINELHUB_CLIENT_SECRET")
-    config.sh_base_url = "https://sh.dataspace.copernicus.eu"
+    client_id = os.getenv("SENTINELHUB_CLIENT_ID", "").strip()
+    client_secret = os.getenv("SENTINELHUB_CLIENT_SECRET", "").strip()
 
-    if not config.sh_client_id or not config.sh_client_secret:
+    if not client_id or not client_secret:
         raise RuntimeError(
             "Hiányzik a Sentinel Hub hitelesítés. "
             "Állítsd be a SENTINELHUB_CLIENT_ID és "
             "SENTINELHUB_CLIENT_SECRET környezeti változókat."
         )
+
+    config.sh_client_id = client_id
+    config.sh_client_secret = client_secret
+    config.sh_base_url = "https://sh.dataspace.copernicus.eu"
+    config.sh_token_url = (
+        "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
+        "protocol/openid-connect/token"
+    )
 
     return config
 
