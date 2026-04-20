@@ -15,17 +15,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show current branch and commit
-        run: |
-          echo "BRANCH: ${GITHUB_REF_NAME}"
-          echo "COMMIT: ${GITHUB_SHA}"
-
-      - name: Show config.yaml before run
-        run: |
-          echo "===== CONFIG.YAML START ====="
-          cat config.yaml
-          echo "===== CONFIG.YAML END ====="
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -38,13 +27,6 @@ jobs:
 
       - name: Run analysis
         run: python main.py
-
-      - name: Show generated AOI after run
-        if: always()
-        run: |
-          echo "===== OUTPUT/AOI.JSON START ====="
-          cat output/aoi.json || true
-          echo "===== OUTPUT/AOI.JSON END ====="
 
       - name: Upload output artifacts
         if: always()
