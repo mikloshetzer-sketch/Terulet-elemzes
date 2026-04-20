@@ -1,25 +1,21 @@
 import json
+import math
 import os
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
-import numpy as np
 import requests
-from PIL import Image
-from sentinelhub import (
-    BBox,
-    CRS,
-    DataCollection,
-    MimeType,
-    SHConfig,
-    SentinelHubRequest,
-    bbox_to_dimensions,
-)
 
 
 STAC_BASE_URL = "https://stac.dataspace.copernicus.eu/v1"
 STAC_SEARCH_URL = f"{STAC_BASE_URL}/search"
+
+CDSE_TOKEN_URL = (
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
+    "protocol/openid-connect/token"
+)
+CDSE_PROCESS_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
 
 
 def load_aoi(aoi_path: str = "output/aoi.json") -> Dict:
@@ -381,9 +377,7 @@ def get_comparison_ranges(config: Dict) -> Dict[str, Dict[str, str]]:
     return comparison
 
 
-def get_sentinelhub_config() -> SHConfig:
-    config = SHConfig()
-
+def _request_cdse_token() -> str:
     client_id = os.getenv("SENTINELHUB_CLIENT_ID", "").strip()
     client_secret = os.getenv("SENTINELHUB_CLIENT_SECRET", "").strip()
 
@@ -394,22 +388,45 @@ def get_sentinelhub_config() -> SHConfig:
             "SENTINELHUB_CLIENT_SECRET környezeti változókat."
         )
 
-    config.sh_client_id = client_id
-    config.sh_client_secret = client_secret
-    config.sh_base_url = "https://sh.dataspace.copernicus.eu"
-    config.sh_token_url = (
-        "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
-        "protocol/openid-connect/token"
+    response = requests.post(
+        CDSE_TOKEN_URL,
+        data={
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=60,
     )
 
-    return config
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Nem sikerült access tokent kérni. "
+            f"HTTP {response.status_code}: {response.text}"
+        )
+
+    token = response.json().get("access_token")
+    if not token:
+        raise RuntimeError("A token válasz nem tartalmaz access_token mezőt.")
+
+    return token
 
 
-def aoi_to_bbox(aoi: Dict) -> BBox:
-    return BBox(
-        bbox=(aoi["min_lon"], aoi["min_lat"], aoi["max_lon"], aoi["max_lat"]),
-        crs=CRS.WGS84,
-    )
+def _aoi_to_dimensions(aoi: Dict, resolution_m: int) -> Tuple[int, int]:
+    min_lon = aoi["min_lon"]
+    min_lat = aoi["min_lat"]
+    max_lon = aoi["max_lon"]
+    max_lat = aoi["max_lat"]
+
+    mid_lat = (min_lat + max_lat) / 2.0
+
+    width_m = (max_lon - min_lon) * 111320.0 * math.cos(math.radians(mid_lat))
+    height_m = (max_lat - min_lat) * 111320.0
+
+    width_px = max(64, int(round(width_m / resolution_m)))
+    height_px = max(64, int(round(height_m / resolution_m)))
+
+    return width_px, height_px
 
 
 def get_true_color_evalscript() -> str:
@@ -435,54 +452,83 @@ def fetch_high_res_image(
     label: str,
     output_folder: Path,
 ) -> Path:
-    sh_config = get_sentinelhub_config()
-    bbox = aoi_to_bbox(aoi)
-    resolution = config_dict["analysis"]["output_resolution_m"]
-    size = bbox_to_dimensions(bbox, resolution=resolution)
-
     feature_datetime = feature.get("properties", {}).get("datetime")
     if not feature_datetime:
         raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
 
     date_only = feature_datetime[:10]
+    resolution = config_dict["analysis"]["output_resolution_m"]
+    width_px, height_px = _aoi_to_dimensions(aoi, resolution)
 
-    request = SentinelHubRequest(
-        evalscript=get_true_color_evalscript(),
-        input_data=[
-            SentinelHubRequest.input_data(
-                data_collection=DataCollection.SENTINEL2_L2A,
-                time_interval=(date_only, date_only),
-            )
-        ],
-        responses=[
-            SentinelHubRequest.output_response("default", MimeType.PNG)
-        ],
-        bbox=bbox,
-        size=size,
-        config=sh_config,
+    token = _request_cdse_token()
+
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": [
+                    aoi["min_lon"],
+                    aoi["min_lat"],
+                    aoi["max_lon"],
+                    aoi["max_lat"],
+                ],
+                "properties": {
+                    "crs": "http://www.opengis.net/def/crs/EPSG/0/4326"
+                },
+            },
+            "data": [
+                {
+                    "type": "sentinel-2-l2a",
+                    "dataFilter": {
+                        "timeRange": {
+                            "from": f"{date_only}T00:00:00Z",
+                            "to": f"{date_only}T23:59:59Z",
+                        },
+                        "mosaickingOrder": "leastCC",
+                    },
+                }
+            ],
+        },
+        "output": {
+            "width": width_px,
+            "height": height_px,
+            "responses": [
+                {
+                    "identifier": "default",
+                    "format": {"type": "image/png"},
+                }
+            ],
+        },
+        "evalscript": get_true_color_evalscript(),
+    }
+
+    response = requests.post(
+        CDSE_PROCESS_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=180,
     )
 
-    data = request.get_data()
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Nem érkezett high-res kép a Process API-ból. "
+            f"HTTP {response.status_code}: {response.text[:500]}"
+        )
 
-    if not data:
-        raise RuntimeError("Nem érkezett high-res kép a Sentinel Hub lekérdezésből.")
-
-    image = data[0]
-
-    if image.dtype != np.uint8:
-        image = np.clip(image * 255, 0, 255).astype(np.uint8)
-
-    img = Image.fromarray(image)
     output_file = output_folder / f"highres_{label}.png"
-    img.save(output_file)
+    with output_file.open("wb") as file:
+        file.write(response.content)
 
     metadata = {
         "label": label,
         "datetime": feature_datetime,
         "output_file": str(output_file),
-        "width_px": img.width,
-        "height_px": img.height,
+        "width_px": width_px,
+        "height_px": height_px,
         "resolution_m": resolution,
+        "process_url": CDSE_PROCESS_URL,
     }
 
     metadata_file = output_folder / f"highres_{label}.json"
