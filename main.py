@@ -63,6 +63,11 @@ def validate_config(config: dict) -> None:
         if key not in config["location"]:
             raise ValueError(f"Hiányzó location mező: {key}")
 
+    required_area = ["buffer_km"]
+    for key in required_area:
+        if key not in config["area_of_interest"]:
+            raise ValueError(f"Hiányzó area_of_interest mező: {key}")
+
     required_time_range = ["start_date", "end_date"]
     for key in required_time_range:
         if key not in config["time_range"]:
@@ -164,6 +169,7 @@ def main() -> None:
         output_folder = prepare_output_folder(config)
 
         print_project_summary(config, output_folder)
+        print(f"DEBUG - config buffer_km érték: {config['area_of_interest']['buffer_km']}")
 
         bbox = build_bounding_box(config)
         print_bounding_box_summary(bbox)
