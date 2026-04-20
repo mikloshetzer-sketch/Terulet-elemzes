@@ -6,6 +6,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import requests
+from PIL import Image, ImageChops
 from shapely.geometry import box, shape
 
 
@@ -109,13 +110,12 @@ def build_stac_search_params(
         ]
     )
 
-    params = {
+    return {
         "bbox": bbox,
         "datetime": f"{start_date}T00:00:00Z/{end_date}T23:59:59Z",
         "collections": "sentinel-2-l2a",
         "limit": "20",
     }
-    return params
 
 
 def _aoi_polygon(aoi: Dict):
@@ -178,21 +178,15 @@ def search_sentinel_data(
         key=lambda feature: feature.get("properties", {}).get("eo:cloud_cover", 100),
     )
 
-    # 1) Csak azok maradjanak, amelyek teljesen lefedik az AOI-t
     covering_features = [
-        feature
-        for feature in all_features
-        if _feature_fully_covers_aoi(feature, aoi)
+        feature for feature in all_features if _feature_fully_covers_aoi(feature, aoi)
     ]
 
     if not covering_features:
         raise RuntimeError(
-            "A találatok között nincs olyan jelenet, amely teljesen lefedné az AOI-t. "
-            "Ezért kaptál fekete, ferde képet. "
-            "Ilyenkor más időszak vagy másik helyszín-/AOI-beállítás kell."
+            "A találatok között nincs olyan jelenet, amely teljesen lefedné az AOI-t."
         )
 
-    # 2) Ezek közül jön a felhőszűrés
     max_cloud = config["data_source"]["cloud_cover_max"]
     filtered = [
         feature
@@ -243,7 +237,7 @@ def build_download_result(feature: Dict, label: str) -> Dict:
     assets = feature.get("assets", {})
     selection_info = feature.get("_selection_info", {})
 
-    result = {
+    return {
         "label": label,
         "status": "found",
         "id": feature.get("id"),
@@ -253,8 +247,6 @@ def build_download_result(feature: Dict, label: str) -> Dict:
         "assets": list(assets.keys()),
         "selection_info": selection_info,
     }
-
-    return result
 
 
 def save_download_result(result: Dict, output_folder: Path, label: str) -> Path:
@@ -296,14 +288,7 @@ def print_download_summary(result: Dict, output_file: Path) -> None:
 
 def select_preview_asset(feature: Dict) -> Tuple[str, Dict]:
     assets = feature.get("assets", {})
-
-    preferred_keys = [
-        "rendered_preview",
-        "visual",
-        "thumbnail",
-        "overview",
-        "preview",
-    ]
+    preferred_keys = ["rendered_preview", "visual", "thumbnail", "overview", "preview"]
 
     for key in preferred_keys:
         asset = assets.get(key)
@@ -488,19 +473,34 @@ function evaluatePixel(sample) {
 """
 
 
-def fetch_high_res_image(
-    config_dict: Dict,
-    aoi: Dict,
-    feature: Dict,
-    label: str,
-    output_folder: Path,
-) -> Path:
-    feature_datetime = feature.get("properties", {}).get("datetime")
-    if not feature_datetime:
-        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+def get_ndvi_evalscript() -> str:
+    return """
+//VERSION=3
+function setup() {
+  return {
+    input: ["B04", "B08"],
+    output: {
+      bands: 3,
+      sampleType: "AUTO"
+    }
+  };
+}
 
-    date_only = feature_datetime[:10]
-    resolution = config_dict["analysis"]["output_resolution_m"]
+function evaluatePixel(sample) {
+  let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04 + 0.0001);
+  let value = (ndvi + 1.0) / 2.0;
+  return [value, value, value];
+}
+"""
+
+
+def _fetch_process_image(
+    aoi: Dict,
+    date_only: str,
+    resolution: int,
+    evalscript: str,
+    output_file: Path,
+) -> Path:
     width_px, height_px = _aoi_to_dimensions(aoi, resolution)
     token = _request_cdse_token()
 
@@ -540,7 +540,7 @@ def fetch_high_res_image(
                 }
             ],
         },
-        "evalscript": get_true_color_evalscript(),
+        "evalscript": evalscript,
     }
 
     response = requests.post(
@@ -556,14 +556,40 @@ def fetch_high_res_image(
 
     if response.status_code != 200:
         raise RuntimeError(
-            f"Nem érkezett high-res kép a Process API-ból. "
+            f"Nem érkezett kép a Process API-ból. "
             f"HTTP {response.status_code}: {response.text[:500]}"
         )
 
-    output_file = output_folder / f"highres_{label}.png"
     with output_file.open("wb") as file:
         file.write(response.content)
 
+    return output_file
+
+
+def fetch_high_res_image(
+    config_dict: Dict,
+    aoi: Dict,
+    feature: Dict,
+    label: str,
+    output_folder: Path,
+) -> Path:
+    feature_datetime = feature.get("properties", {}).get("datetime")
+    if not feature_datetime:
+        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+
+    date_only = feature_datetime[:10]
+    resolution = config_dict["analysis"]["output_resolution_m"]
+
+    output_file = output_folder / f"highres_{label}.png"
+    _fetch_process_image(
+        aoi=aoi,
+        date_only=date_only,
+        resolution=resolution,
+        evalscript=get_true_color_evalscript(),
+        output_file=output_file,
+    )
+
+    width_px, height_px = _aoi_to_dimensions(aoi, resolution)
     metadata = {
         "label": label,
         "datetime": feature_datetime,
@@ -571,13 +597,7 @@ def fetch_high_res_image(
         "width_px": width_px,
         "height_px": height_px,
         "resolution_m": resolution,
-        "process_url": CDSE_PROCESS_URL,
-        "bbox": [
-            aoi["min_lon"],
-            aoi["min_lat"],
-            aoi["max_lon"],
-            aoi["max_lat"],
-        ],
+        "type": "true_color",
     }
 
     metadata_file = output_folder / f"highres_{label}.json"
@@ -587,7 +607,66 @@ def fetch_high_res_image(
     return output_file
 
 
+def fetch_ndvi_image(
+    config_dict: Dict,
+    aoi: Dict,
+    feature: Dict,
+    label: str,
+    output_folder: Path,
+) -> Path:
+    feature_datetime = feature.get("properties", {}).get("datetime")
+    if not feature_datetime:
+        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+
+    date_only = feature_datetime[:10]
+    resolution = config_dict["analysis"]["output_resolution_m"]
+
+    output_file = output_folder / f"ndvi_{label}.png"
+    _fetch_process_image(
+        aoi=aoi,
+        date_only=date_only,
+        resolution=resolution,
+        evalscript=get_ndvi_evalscript(),
+        output_file=output_file,
+    )
+
+    return output_file
+
+
+def create_change_map(
+    before_image_path: Path,
+    after_image_path: Path,
+    output_folder: Path,
+) -> Path:
+    before_img = Image.open(before_image_path).convert("L")
+    after_img = Image.open(after_image_path).convert("L")
+
+    if before_img.size != after_img.size:
+        after_img = after_img.resize(before_img.size)
+
+    diff = ImageChops.difference(before_img, after_img)
+
+    enhanced = diff.point(lambda p: min(255, int(p * 3.0)))
+
+    output_file = output_folder / "change_map.png"
+    enhanced.save(output_file)
+
+    return output_file
+
+
 def print_high_res_summary(label: str, image_path: Path) -> None:
     print(f"\n=== High-res AOI kép elkészült ({label}) ===")
     print(f"Kimeneti fájl: {image_path.resolve()}")
     print("==========================================\n")
+
+
+def print_ndvi_summary(label: str, image_path: Path) -> None:
+    print(f"\n=== NDVI kép elkészült ({label}) ===")
+    print(f"Kimeneti fájl: {image_path.resolve()}")
+    print("===================================\n")
+
+
+def print_change_map_summary(image_path: Path) -> None:
+    print("\n=== Change map elkészült ===")
+    print(f"Kimeneti fájl: {image_path.resolve()}")
+    print("============================\n")
