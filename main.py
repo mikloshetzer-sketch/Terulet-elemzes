@@ -6,20 +6,24 @@ from aoi import build_bounding_box, print_bounding_box_summary
 from save_aoi import save_aoi_to_json, print_save_confirmation
 from data_fetch import (
     build_data_request,
+    build_download_result,
+    create_change_map,
     download_preview_image,
     fetch_high_res_image,
+    fetch_ndvi_image,
     get_comparison_ranges,
     load_aoi,
+    print_change_map_summary,
     print_data_request_summary,
     print_download_summary,
     print_high_res_summary,
+    print_ndvi_summary,
     print_preview_download_summary,
     print_stac_result_summary,
     save_data_request,
     save_download_result,
     save_stac_result,
     search_sentinel_data,
-    build_download_result,
 )
 from compare_images import (
     create_side_by_side_comparison,
@@ -138,7 +142,7 @@ def process_period(
     config: dict,
     aoi: dict,
     output_folder: Path,
-) -> Path:
+) -> dict:
     feature = search_sentinel_data(config, aoi, start_date, end_date)
     stac_result_file = save_stac_result(feature, output_folder, label)
     print_stac_result_summary(feature, stac_result_file, label)
@@ -159,7 +163,21 @@ def process_period(
     )
     print_high_res_summary(label, highres_path)
 
-    return highres_path
+    ndvi_path = fetch_ndvi_image(
+        config_dict=config,
+        aoi=aoi,
+        feature=feature,
+        label=label,
+        output_folder=output_folder,
+    )
+    print_ndvi_summary(label, ndvi_path)
+
+    return {
+        "feature": feature,
+        "preview_path": Path(preview_result["output_file"]),
+        "highres_path": highres_path,
+        "ndvi_path": ndvi_path,
+    }
 
 
 def main() -> None:
@@ -185,7 +203,7 @@ def main() -> None:
 
         comparison = get_comparison_ranges(config)
 
-        before_highres = process_period(
+        before_result = process_period(
             "before",
             comparison["before"]["start_date"],
             comparison["before"]["end_date"],
@@ -194,7 +212,7 @@ def main() -> None:
             output_folder,
         )
 
-        after_highres = process_period(
+        after_result = process_period(
             "after",
             comparison["after"]["start_date"],
             comparison["after"]["end_date"],
@@ -204,20 +222,40 @@ def main() -> None:
         )
 
         comparison_file = create_side_by_side_comparison(
-            str(before_highres),
-            str(after_highres),
+            str(before_result["highres_path"]),
+            str(after_result["highres_path"]),
             output_folder,
             before_label="BEFORE",
             after_label="AFTER",
         )
         print_comparison_summary(comparison_file)
 
+        ndvi_comparison_file = create_side_by_side_comparison(
+            str(before_result["ndvi_path"]),
+            str(after_result["ndvi_path"]),
+            output_folder,
+            before_label="NDVI BEFORE",
+            after_label="NDVI AFTER",
+        )
+        ndvi_side_by_side = output_folder / "ndvi_side_by_side.jpg"
+        ndvi_side_by_side.write_bytes(ndvi_comparison_file.read_bytes())
+        print(f"NDVI összehasonlító kép mentve: {ndvi_side_by_side.resolve()}")
+
+        change_map_file = create_change_map(
+            before_result["ndvi_path"],
+            after_result["ndvi_path"],
+            output_folder,
+        )
+        print_change_map_summary(change_map_file)
+
         print("AOI sikeresen létrehozva és elmentve.")
         print("Adatlekérés előkészítve.")
         print("Before/after STAC találatok sikeresen lekérve.")
         print("Before/after preview képek sikeresen letöltve.")
         print("Before/after high-res AOI képek sikeresen elkészültek.")
-        print("Összehasonlító kép sikeresen elkészült.")
+        print("Before/after NDVI képek sikeresen elkészültek.")
+        print("Összehasonlító képek sikeresen elkészültek.")
+        print("Change map sikeresen elkészült.")
 
     except Exception as error:
         print(f"Hiba: {error}")
