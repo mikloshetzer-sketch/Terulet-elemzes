@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pyyaml requests pillow
+          pip install pyyaml requests pillow shapely
 
       - name: Run analysis
         run: python main.py
