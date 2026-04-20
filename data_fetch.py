@@ -423,8 +423,8 @@ def _aoi_to_dimensions(aoi: Dict, resolution_m: int) -> Tuple[int, int]:
     width_m = (max_lon - min_lon) * 111320.0 * math.cos(math.radians(mid_lat))
     height_m = (max_lat - min_lat) * 111320.0
 
-    width_px = max(64, int(round(width_m / resolution_m)))
-    height_px = max(64, int(round(height_m / resolution_m)))
+    width_px = max(256, int(round(width_m / resolution_m)))
+    height_px = max(256, int(round(height_m / resolution_m)))
 
     return width_px, height_px
 
@@ -434,13 +434,16 @@ def get_true_color_evalscript() -> str:
 //VERSION=3
 function setup() {
   return {
-    input: ["B02", "B03", "B04", "dataMask"],
-    output: { bands: 4, sampleType: "AUTO" }
+    input: ["B02", "B03", "B04"],
+    output: {
+      bands: 3,
+      sampleType: "AUTO"
+    }
   };
 }
 
 function evaluatePixel(sample) {
-  return [sample.B04, sample.B03, sample.B02, sample.dataMask];
+  return [sample.B04, sample.B03, sample.B02];
 }
 """
 
@@ -459,7 +462,6 @@ def fetch_high_res_image(
     date_only = feature_datetime[:10]
     resolution = config_dict["analysis"]["output_resolution_m"]
     width_px, height_px = _aoi_to_dimensions(aoi, resolution)
-
     token = _request_cdse_token()
 
     payload = {
@@ -484,7 +486,7 @@ def fetch_high_res_image(
                             "to": f"{date_only}T23:59:59Z",
                         },
                         "mosaickingOrder": "leastCC",
-                    },
+                    }
                 }
             ],
         },
@@ -506,6 +508,7 @@ def fetch_high_res_image(
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            "Accept": "image/png",
         },
         json=payload,
         timeout=180,
@@ -529,6 +532,12 @@ def fetch_high_res_image(
         "height_px": height_px,
         "resolution_m": resolution,
         "process_url": CDSE_PROCESS_URL,
+        "bbox": [
+            aoi["min_lon"],
+            aoi["min_lat"],
+            aoi["max_lon"],
+            aoi["max_lat"],
+        ],
     }
 
     metadata_file = output_folder / f"highres_{label}.json"
