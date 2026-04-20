@@ -473,12 +473,12 @@ function evaluatePixel(sample) {
 """
 
 
-def get_ndvi_evalscript() -> str:
+def get_ndbi_evalscript() -> str:
     return """
 //VERSION=3
 function setup() {
   return {
-    input: ["B04", "B08"],
+    input: ["B08", "B11"],
     output: {
       bands: 3,
       sampleType: "AUTO"
@@ -487,14 +487,200 @@ function setup() {
 }
 
 function evaluatePixel(sample) {
-  let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04 + 0.0001);
-  let normalized = (ndvi + 1.0) / 2.0;
-  normalized = Math.pow(normalized, 0.5);
+  let ndbi = (sample.B11 - sample.B08) / (sample.B11 + sample.B08 + 0.0001);
 
+  // normalizálás 0-1 közé
+  let normalized = (ndbi + 1.0) / 2.0;
+
+  // kontraszt erősítés
+  normalized = Math.pow(normalized, 0.7);
+
+  // urban jelleg kiemelése:
+  // piros = built-up / kopár / mesterséges
+  // sötétebb = kevésbé built-up
   return [
-    1.0 - normalized,
     normalized,
-    0.0
+    normalized * 0.5,
+    1.0 - normalized
   ];
 }
 """
+
+
+def _fetch_process_image(
+    aoi: Dict,
+    date_only: str,
+    resolution: int,
+    evalscript: str,
+    output_file: Path,
+) -> Path:
+    width_px, height_px = _aoi_to_dimensions(aoi, resolution)
+    token = _request_cdse_token()
+
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": [
+                    aoi["min_lon"],
+                    aoi["min_lat"],
+                    aoi["max_lon"],
+                    aoi["max_lat"],
+                ],
+                "properties": {
+                    "crs": "http://www.opengis.net/def/crs/EPSG/0/4326"
+                },
+            },
+            "data": [
+                {
+                    "type": "sentinel-2-l2a",
+                    "dataFilter": {
+                        "timeRange": {
+                            "from": f"{date_only}T00:00:00Z",
+                            "to": f"{date_only}T23:59:59Z",
+                        },
+                        "mosaickingOrder": "leastCC",
+                    }
+                }
+            ],
+        },
+        "output": {
+            "width": width_px,
+            "height": height_px,
+            "responses": [
+                {
+                    "identifier": "default",
+                    "format": {"type": "image/png"},
+                }
+            ],
+        },
+        "evalscript": evalscript,
+    }
+
+    response = requests.post(
+        CDSE_PROCESS_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "image/png",
+        },
+        json=payload,
+        timeout=180,
+    )
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Nem érkezett kép a Process API-ból. "
+            f"HTTP {response.status_code}: {response.text[:500]}"
+        )
+
+    with output_file.open("wb") as file:
+        file.write(response.content)
+
+    return output_file
+
+
+def fetch_high_res_image(
+    config_dict: Dict,
+    aoi: Dict,
+    feature: Dict,
+    label: str,
+    output_folder: Path,
+) -> Path:
+    feature_datetime = feature.get("properties", {}).get("datetime")
+    if not feature_datetime:
+        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+
+    date_only = feature_datetime[:10]
+    resolution = config_dict["analysis"]["output_resolution_m"]
+
+    output_file = output_folder / f"highres_{label}.png"
+    _fetch_process_image(
+        aoi=aoi,
+        date_only=date_only,
+        resolution=resolution,
+        evalscript=get_true_color_evalscript(),
+        output_file=output_file,
+    )
+
+    width_px, height_px = _aoi_to_dimensions(aoi, resolution)
+    metadata = {
+        "label": label,
+        "datetime": feature_datetime,
+        "output_file": str(output_file),
+        "width_px": width_px,
+        "height_px": height_px,
+        "resolution_m": resolution,
+        "type": "true_color",
+    }
+
+    metadata_file = output_folder / f"highres_{label}.json"
+    with metadata_file.open("w", encoding="utf-8") as file:
+        json.dump(metadata, file, indent=4, ensure_ascii=False)
+
+    return output_file
+
+
+def fetch_ndvi_image(
+    config_dict: Dict,
+    aoi: Dict,
+    feature: Dict,
+    label: str,
+    output_folder: Path,
+) -> Path:
+    feature_datetime = feature.get("properties", {}).get("datetime")
+    if not feature_datetime:
+        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+
+    date_only = feature_datetime[:10]
+    resolution = config_dict["analysis"]["output_resolution_m"]
+
+    output_file = output_folder / f"urban_{label}.png"
+    _fetch_process_image(
+        aoi=aoi,
+        date_only=date_only,
+        resolution=resolution,
+        evalscript=get_ndbi_evalscript(),
+        output_file=output_file,
+    )
+
+    return output_file
+
+
+def create_change_map(
+    before_image_path: Path,
+    after_image_path: Path,
+    output_folder: Path,
+) -> Path:
+    before_img = Image.open(before_image_path).convert("RGB")
+    after_img = Image.open(after_image_path).convert("RGB")
+
+    if before_img.size != after_img.size:
+        after_img = after_img.resize(before_img.size)
+
+    diff = ImageChops.difference(before_img, after_img)
+
+    # Kontrasztosabb change map
+    diff = diff.point(lambda p: min(255, int(p * 3.0)))
+
+    output_file = output_folder / "urban_change_map.png"
+    diff.save(output_file)
+
+    return output_file
+
+
+def print_high_res_summary(label: str, image_path: Path) -> None:
+    print(f"\n=== High-res AOI kép elkészült ({label}) ===")
+    print(f"Kimeneti fájl: {image_path.resolve()}")
+    print("==========================================\n")
+
+
+def print_ndvi_summary(label: str, image_path: Path) -> None:
+    print(f"\n=== Urban/NDBI kép elkészült ({label}) ===")
+    print(f"Kimeneti fájl: {image_path.resolve()}")
+    print("=========================================\n")
+
+
+def print_change_map_summary(image_path: Path) -> None:
+    print("\n=== Urban change map elkészült ===")
+    print(f"Kimeneti fájl: {image_path.resolve()}")
+    print("==================================\n")
