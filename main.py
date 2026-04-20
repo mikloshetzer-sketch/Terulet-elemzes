@@ -163,20 +163,20 @@ def process_period(
     )
     print_high_res_summary(label, highres_path)
 
-    ndvi_path = fetch_ndvi_image(
+    urban_path = fetch_ndvi_image(
         config_dict=config,
         aoi=aoi,
         feature=feature,
         label=label,
         output_folder=output_folder,
     )
-    print_ndvi_summary(label, ndvi_path)
+    print_ndvi_summary(label, urban_path)
 
     return {
         "feature": feature,
         "preview_path": Path(preview_result["output_file"]),
         "highres_path": highres_path,
-        "ndvi_path": ndvi_path,
+        "urban_path": urban_path,
     }
 
 
@@ -233,21 +233,21 @@ def main() -> None:
         )
         print_comparison_summary(comparison_file)
 
-        ndvi_temp_file = create_side_by_side_comparison(
-            str(before_result["ndvi_path"]),
-            str(after_result["ndvi_path"]),
+        urban_temp_file = create_side_by_side_comparison(
+            str(before_result["urban_path"]),
+            str(after_result["urban_path"]),
             output_folder,
             before_label="URBAN BEFORE",
             after_label="URBAN AFTER",
         )
 
         urban_side_by_side = output_folder / "urban_side_by_side.jpg"
-        urban_side_by_side.write_bytes(ndvi_temp_file.read_bytes())
+        urban_side_by_side.write_bytes(urban_temp_file.read_bytes())
         print(f"Urban összehasonlító kép mentve: {urban_side_by_side.resolve()}")
 
         change_map_file = create_change_map(
-            before_result["ndvi_path"],
-            after_result["ndvi_path"],
+            before_result["urban_path"],
+            after_result["urban_path"],
             output_folder,
         )
         print_change_map_summary(change_map_file)
@@ -259,7 +259,7 @@ def main() -> None:
         print("Before/after high-res AOI képek sikeresen elkészültek.")
         print("Urban index képek sikeresen elkészültek.")
         print("Összehasonlító képek sikeresen elkészültek.")
-        print("Change map sikeresen elkészült.")
+        print("Urban change map sikeresen elkészült.")
 
     except Exception as error:
         print(f"Hiba: {error}")
