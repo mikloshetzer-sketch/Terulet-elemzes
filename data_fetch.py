@@ -479,30 +479,20 @@ def get_ndbi_evalscript() -> str:
 function setup() {
   return {
     input: ["B08", "B11"],
-    output: {
-      bands: 3,
-      sampleType: "AUTO"
-    }
+    output: { bands: 3, sampleType: "AUTO" }
   };
 }
 
 function evaluatePixel(sample) {
   let ndbi = (sample.B11 - sample.B08) / (sample.B11 + sample.B08 + 0.0001);
 
-  // normalizálás 0-1 közé
-  let normalized = (ndbi + 1.0) / 2.0;
-
-  // kontraszt erősítés
-  normalized = Math.pow(normalized, 0.7);
-
-  // urban jelleg kiemelése:
-  // piros = built-up / kopár / mesterséges
-  // sötétebb = kevésbé built-up
-  return [
-    normalized,
-    normalized * 0.5,
-    1.0 - normalized
-  ];
+  if (ndbi > 0.2) {
+    return [1.0, 0.0, 0.0];
+  } else if (ndbi < -0.2) {
+    return [0.0, 1.0, 0.0];
+  } else {
+    return [0.3, 0.3, 0.3];
+  }
 }
 """
 
@@ -658,8 +648,6 @@ def create_change_map(
         after_img = after_img.resize(before_img.size)
 
     diff = ImageChops.difference(before_img, after_img)
-
-    # Kontrasztosabb change map
     diff = diff.point(lambda p: min(255, int(p * 3.0)))
 
     output_file = output_folder / "urban_change_map.png"
