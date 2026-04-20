@@ -6,7 +6,7 @@ location:
   longitude: 37.1343
 
 area_of_interest:
-  buffer_km: 3
+  buffer_km: 5
 
 time_range:
   start_date: "2018-01-01"
