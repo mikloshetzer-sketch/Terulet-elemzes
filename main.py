@@ -11,6 +11,7 @@ from data_fetch import (
     download_preview_image,
     fetch_high_res_image,
     fetch_ndvi_image,
+    fetch_urban_raw_image,
     get_comparison_ranges,
     load_aoi,
     print_change_map_summary,
@@ -172,11 +173,20 @@ def process_period(
     )
     print_ndvi_summary(label, urban_path)
 
+    urban_raw_path = fetch_urban_raw_image(
+        config_dict=config,
+        aoi=aoi,
+        feature=feature,
+        label=label,
+        output_folder=output_folder,
+    )
+
     return {
         "feature": feature,
         "preview_path": Path(preview_result["output_file"]),
         "highres_path": highres_path,
         "urban_path": urban_path,
+        "urban_raw_path": urban_raw_path,
     }
 
 
@@ -246,8 +256,8 @@ def main() -> None:
         print(f"Urban összehasonlító kép mentve: {urban_side_by_side.resolve()}")
 
         change_map_file = create_change_map(
-            before_result["urban_path"],
-            after_result["urban_path"],
+            before_result["urban_raw_path"],
+            after_result["urban_raw_path"],
             output_folder,
         )
         print_change_map_summary(change_map_file)
@@ -259,7 +269,7 @@ def main() -> None:
         print("Before/after high-res AOI képek sikeresen elkészültek.")
         print("Urban index képek sikeresen elkészültek.")
         print("Összehasonlító képek sikeresen elkészültek.")
-        print("Urban change map sikeresen elkészült.")
+        print("Irányított urban change map sikeresen elkészült.")
 
     except Exception as error:
         print(f"Hiba: {error}")
