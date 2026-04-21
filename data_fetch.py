@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import requests
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image
 from shapely.geometry import box, shape
 
 
@@ -473,7 +473,7 @@ function evaluatePixel(sample) {
 """
 
 
-def get_ndbi_evalscript() -> str:
+def get_ndbi_visual_evalscript() -> str:
     return """
 //VERSION=3
 function setup() {
@@ -493,6 +493,26 @@ function evaluatePixel(sample) {
   } else {
     return [0.25, 0.25, 0.25];
   }
+}
+"""
+
+
+def get_ndbi_raw_evalscript() -> str:
+    return """
+//VERSION=3
+function setup() {
+  return {
+    input: ["B08", "B11"],
+    output: { bands: 1, sampleType: "AUTO" }
+  };
+}
+
+function evaluatePixel(sample) {
+  let ndbi = (sample.B11 - sample.B08) / (sample.B11 + sample.B08 + 0.0001);
+
+  // -1..1 -> 0..1
+  let normalized = (ndbi + 1.0) / 2.0;
+  return [normalized];
 }
 """
 
@@ -629,7 +649,33 @@ def fetch_ndvi_image(
         aoi=aoi,
         date_only=date_only,
         resolution=resolution,
-        evalscript=get_ndbi_evalscript(),
+        evalscript=get_ndbi_visual_evalscript(),
+        output_file=output_file,
+    )
+
+    return output_file
+
+
+def fetch_urban_raw_image(
+    config_dict: Dict,
+    aoi: Dict,
+    feature: Dict,
+    label: str,
+    output_folder: Path,
+) -> Path:
+    feature_datetime = feature.get("properties", {}).get("datetime")
+    if not feature_datetime:
+        raise ValueError("A kiválasztott STAC feature nem tartalmaz datetime mezőt.")
+
+    date_only = feature_datetime[:10]
+    resolution = config_dict["analysis"]["output_resolution_m"]
+
+    output_file = output_folder / f"urban_raw_{label}.png"
+    _fetch_process_image(
+        aoi=aoi,
+        date_only=date_only,
+        resolution=resolution,
+        evalscript=get_ndbi_raw_evalscript(),
         output_file=output_file,
     )
 
@@ -647,15 +693,32 @@ def create_change_map(
     if before_img.size != after_img.size:
         after_img = after_img.resize(before_img.size)
 
-    diff = ImageChops.difference(before_img, after_img)
+    width, height = before_img.size
+    before_pixels = before_img.load()
+    after_pixels = after_img.load()
 
-    threshold = 25
-    diff = diff.point(lambda p: 255 if p > threshold else 0)
+    output = Image.new("RGB", (width, height), (0, 0, 0))
+    out_pixels = output.load()
 
-    diff = diff.filter(ImageFilter.MedianFilter(size=3))
+    threshold = 18
 
-    output_file = output_folder / "urban_change_map_clean.png"
-    diff.save(output_file)
+    for y in range(height):
+        for x in range(width):
+            before_val = before_pixels[x, y]
+            after_val = after_pixels[x, y]
+            delta = after_val - before_val
+
+            if delta > threshold:
+                intensity = min(255, int((delta - threshold) * 4))
+                out_pixels[x, y] = (intensity, 0, 0)
+            elif delta < -threshold:
+                intensity = min(255, int((abs(delta) - threshold) * 4))
+                out_pixels[x, y] = (0, 0, intensity)
+            else:
+                out_pixels[x, y] = (0, 0, 0)
+
+    output_file = output_folder / "urban_change_map_directional.png"
+    output.save(output_file)
 
     return output_file
 
@@ -673,6 +736,6 @@ def print_ndvi_summary(label: str, image_path: Path) -> None:
 
 
 def print_change_map_summary(image_path: Path) -> None:
-    print("\n=== Urban change map elkészült ===")
+    print("\n=== Irányított urban change map elkészült ===")
     print(f"Kimeneti fájl: {image_path.resolve()}")
-    print("==================================\n")
+    print("=============================================\n")
